@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>psd.js image example</title>
+
+  <style type="text/css">
+    body,
+    html {
+      padding: 0;
+      margin: 0;
+    }
+  </style>
+
+  <script type="text/javascript" src="./psd.min.js"></script>
+</head>
+
+<body>
+  <p>File</p>
+  <input type="file" name="file" id="file" accept=".psd">
+  <p>Name</p>
+  <input type="text" name="text" id="name">
+  <br>
+  <br>
+  <button id="export">Export JSON</button>
+  <div id="loading"></div>
+
+  <script type="text/javascript">
+    (function () {
+
+      var PSD = require('psd');
+
+
+      document.getElementById("export").addEventListener("click", async () => {
+        try {
+          const eleName = document.getElementById("name");
+          if (eleName.value === "") {
+            eleName.focus()
+            return
+          }
+          const eleFile = document.getElementById("file");
+          var fileList = eleFile.files;
+
+          if (fileList.length === 0) {
+            alert("No files")
+            return
+          }
+
+          const file = fileList[0];
+          if (file.name.split(".")[file.name.split(".").length - 1] !== "psd") {
+            alert("Wrong format")
+            return
+          }
+
+          document.getElementById('loading').innerHTML = "<p>Loading</p>";
+
+          const pathFile = await URL.createObjectURL(file);
+          await PSD.fromURL(pathFile).then((psd) => {
+            var data = JSON.stringify(psd.tree().export(), undefined, 2);
+
+            const filename = eleName.value + '.json';
+            const jsonStr = data;
+
+            let element = document.createElement('a');
+            element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(jsonStr));
+            element.setAttribute('download', filename);
+
+            element.style.display = 'none';
+            document.body.appendChild(element);
+
+            element.click();
+
+            document.body.removeChild(element);
+          });
+          eleName.value = ""
+          eleFile.value = '';
+          if (eleFile.value) {
+            eleFile.type = "text";
+            eleFile.type = "file";
+          }
+
+          document.getElementById('loading').innerHTML = "";
+
+        } catch (error) {
+          console.log(error)
+        }
+      })
+    }());
+  </script>
+</body>
+
+</html>
