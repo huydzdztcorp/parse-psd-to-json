@@ -13,23 +13,248 @@
   </style>
 
   <script type="text/javascript" src="./psd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/460/fabric.min.js"
+    integrity="sha512-ybPp3kCrNQXdvTfh99YLIdnajWnQvHuEKDJ+b26mxI9w+pLhnBo3HmNLJ1pEUBFO1Q0bfJxApeqecNbmaV763g=="
+    crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 
 <body>
   <p>File</p>
   <input type="file" name="file" id="file" accept=".psd">
   <p>Name</p>
-  <input type="text" name="text" id="name">
+  <input type="text" name="text" id="name" value="huy">
   <br>
   <br>
   <button id="export">Export JSON</button>
   <div id="loading"></div>
+  <div style="display: block;">
+    <canvas id="c" width="4000" height="4000"></canvas>
+  </div>
 
   <script type="text/javascript">
     (function () {
 
       var PSD = require('psd');
+      const NAME_BACKGROUND = 'background';
 
+      const exportJson = (fileName, data) => {
+        const name = fileName + '.json';
+        const jsonStr = data;
+
+        let element = document.createElement('a');
+        element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(jsonStr));
+        element.setAttribute('download', name);
+
+        element.style.display = 'none';
+        document.body.appendChild(element);
+
+        element.click();
+
+        document.body.removeChild(element);
+      }
+
+      function uuidv4() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+          var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+          return v.toString(16);
+        });
+      }
+
+      const dataUrlToFile = async (dataUrl, fileName) => {
+        const res = await fetch(dataUrl);
+        const blob = await res.blob();
+        return new File([blob], fileName, { type: 'image/png' });
+      };
+
+      const isEmptyObject = (value) => {
+        return !!value && value.constructor === Object && Object.keys(value).length === 0;
+      };
+
+      const formatRgba2hex = (r, g, b, a) => {
+        if (r > 255 || g > 255 || b > 255 || a > 255) throw "Invalid color component"
+
+        return `#${(256 + r).toString(16).substr(1) + (((1 << 24) + (g << 16)) | (b << 8) | a).toString(16).substr(1)}`
+      }
+
+
+      const getVisibleStateByParent = (layer) => {
+        if (!layer || isEmptyObject(layer)) {
+          return false;
+        }
+
+        let isVisible = layer.layer.visible;
+        if (isVisible) {
+          let { parent } = layer;
+          while (parent) {
+            if (parent) {
+              isVisible = parent.layer?.visible ?? isVisible;
+              if (!isVisible) {
+                parent = null;
+              } else {
+                parent = parent.parent;
+              }
+            }
+          }
+        }
+        return isVisible;
+      };
+
+      const getNewDesc = async (desc, isFirst) => {
+        const image = (!isFirst && desc._children.length === 0) ? await desc.layer.image.toBase64() : ""
+        let newChildren = []
+        if (desc._children && desc._children.length > 0) {
+          await Promise.all(
+            desc._children.map(async (childDesc) => {
+              try {
+                const newChildDesc = await getNewDesc(childDesc, false)
+
+                newChildren.push(newChildDesc)
+              } catch (error) {
+                console.log(error)
+              }
+            })
+          )
+        }
+
+        const textObj = await desc.export().text;
+        const visible = await getVisibleStateByParent(desc);
+
+        const newDesc = {
+          coords: desc.coords,
+          name: desc.name,
+          id: desc.id,
+          bottom: desc.bottom,
+          height: desc.height,
+          left: desc.left,
+          right: desc.right,
+          top: desc.top,
+          width: desc.width,
+          image: image,
+          children: newChildren,
+          text: textObj || null,
+          visible: visible,
+        }
+
+        return newDesc
+      }
+
+      const loadImageFabCanvas = (
+        url,
+        options) => {
+        return new Promise((resolve, reject) => {
+          fabric.util.loadImage(url, async img => {
+            try {
+              const oImg = new fabric.Image(img);
+              const optionsTemp = {
+                ...options,
+                angle: 0,
+                width: img.width,
+                height: img.height,
+              };
+              oImg.set(optionsTemp);
+              oImg.scaleToWidth(img.width);
+              oImg.scaleToHeight(img.height);
+
+              resolve(oImg);
+            } catch (error) {
+              reject(error);
+            }
+          });
+        });
+      };
+
+      const getImageBackground = async (layerNoOptions) => {
+        let imgBg = "";
+
+        try {
+          var canvas = new fabric.Canvas('c');
+
+          const layerBackground = layerNoOptions.find((desc) => desc.name.toLowerCase() === NAME_BACKGROUND);
+          if (!layerBackground || isEmptyObject(layerBackground)) {
+            return imgBg;
+          }
+
+          const base64 = await layerBackground.layer.image.toBase64();
+          const file = await dataUrlToFile(base64, 'abc.png');
+
+          const reader = new FileReader();
+          reader.addEventListener(
+            'load',
+            async () => {
+              await fabric.Image.fromURL(reader.result, async (img) => {
+                canvas.setDimensions({
+                  width: img.width,
+                  height: img.height,
+                });
+                console.log(canvas)
+                const canvasWidth = canvas.width ?? NUM_DEFAULT_SIZE;
+                const canvasHeight = canvas.height ?? NUM_DEFAULT_SIZE;
+
+                await canvas.setBackgroundImage(img, canvas.renderAll.bind(canvas), {
+                  scaleX: canvasWidth / img.width,
+                  scaleY: canvasHeight / img.height,
+                });
+              });
+            },
+            false,
+          );
+
+          if (file) {
+            await reader.readAsDataURL(file);
+          }
+          console.log(layerNoOptions)
+          await Promise.all(
+            layerNoOptions.reverse().map(async desc => {
+              try {
+                if (isEmptyObject(desc) || !desc || desc.name === NAME_BACKGROUND) {
+                  return;
+                }
+
+                const visible = await getVisibleStateByParent(desc);
+
+                const {
+                  coords: { top, left },
+                  name,
+                  id,
+                } = desc;
+
+
+                let options = {
+                  top: top,
+                  left: left,
+                  name,
+                  visible,
+                };
+
+                const base64 = await desc.layer.image.toBase64();
+
+                await loadImageFabCanvas(base64, options)
+                  .then((oImg) => canvas.add(oImg))
+                  .catch(err => new Error(err));
+              } catch (error) {
+                console.log(error);
+              }
+            }),
+          );
+          var ratio = window.devicePixelRatio;
+
+          imgBg = canvas.toDataURL(
+            {
+              format: 'png',
+              // multiplier: 1,
+              // left: 0,
+              // top: 0,
+              // width: canvas.width / ratio,
+              // height: canvas.height / ratio
+            });
+          console.log(imgBg)
+          return imgBg;
+        } catch (error) {
+          console.log(error);
+
+          return imgBg;
+        }
+      }
 
       document.getElementById("export").addEventListener("click", async () => {
         try {
@@ -55,23 +280,37 @@
           document.getElementById('loading').innerHTML = "<p>Loading</p>";
 
           const pathFile = await URL.createObjectURL(file);
-          await PSD.fromURL(pathFile).then((psd) => {
-            var data = JSON.stringify(psd.tree().export(), undefined, 2);
+          await PSD.fromURL(pathFile).then(async (psd) => {
+            let descendants = await psd.tree().descendants()
 
-            const filename = eleName.value + '.json';
-            const jsonStr = data;
+            descendants.forEach((desc) => desc.id = uuidv4())
+            descendants = descendants.filter((desc) => !desc.parent.parent)
 
-            let element = document.createElement('a');
-            element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(jsonStr));
-            element.setAttribute('download', filename);
+            let newDescendants = []
 
-            element.style.display = 'none';
-            document.body.appendChild(element);
+            await Promise.all(
+              descendants.map(async (desc) => {
+                try {
+                  const newDesc = await getNewDesc(desc, true)
 
-            element.click();
+                  newDescendants.push(newDesc)
+                } catch (error) {
+                  console.log(error)
+                }
+              })
+            )
 
-            document.body.removeChild(element);
+            const layerNoOptions = descendants.filter((desc) => desc._children.length === 0)
+            const imageBackground = getImageBackground(layerNoOptions)
+            let json = {
+              children: newDescendants,
+              imageBackground: imageBackground
+            }
+
+            exportJson(eleName.value, JSON.stringify(newDescendants))
+
           });
+
           eleName.value = ""
           eleFile.value = '';
           if (eleFile.value) {
@@ -83,6 +322,8 @@
 
         } catch (error) {
           console.log(error)
+          document.getElementById('loading').innerHTML = "";
+
         }
       })
     }());
